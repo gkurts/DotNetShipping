@@ -18,8 +18,8 @@ namespace DotNetShipping.ShippingProviders
 		#region Fields
 
 		private const int defaultTimeout = 10;
-		private const string ratesUrl = "https://www.ups.com/ups.app/xml/Rate";
-
+        
+        private string _ratesUrl;
 		private readonly string _licenseNumber;
 		private readonly string _password;
 		private readonly Hashtable _serviceCodes = new Hashtable(12);
@@ -27,6 +27,9 @@ namespace DotNetShipping.ShippingProviders
 		private readonly string _userID;
 		private AvailableServices _services = AvailableServices.All;
 	    private string _serviceDescription;
+
+        public string ShipperNumber { get; set; }
+        public bool UseNegotiatedRates { get; set; }
 
 		#endregion
 
@@ -44,6 +47,7 @@ namespace DotNetShipping.ShippingProviders
 			_password = appSettings["UPSPassword"];
 			_timeout = defaultTimeout;
 		    _serviceDescription = "";
+		    _ratesUrl = ConfigurationManager.AppSettings["UPSProdUrl"];
 		}
 
 		public UPSProvider(string licenseNumber, string userID, string password) : this(licenseNumber, userID, password, defaultTimeout)
@@ -59,6 +63,7 @@ namespace DotNetShipping.ShippingProviders
 			_timeout = timeout;
 		    _serviceDescription = "";
 			loadServiceCodes();
+            _ratesUrl = ConfigurationManager.AppSettings["UPSProdUrl"];
 		}
 
         public UPSProvider(string licenseNumber, string userID, string password, string serviceDescription)
@@ -70,6 +75,7 @@ namespace DotNetShipping.ShippingProviders
             _timeout = defaultTimeout;
             _serviceDescription = serviceDescription;
             loadServiceCodes();
+            _ratesUrl = ConfigurationManager.AppSettings["UPSProdUrl"];
         }
 
 	    public UPSProvider(string licenseNumber, string userID, string password, int timeout, string serviceDescription)
@@ -81,6 +87,7 @@ namespace DotNetShipping.ShippingProviders
             _timeout = timeout;
             _serviceDescription = serviceDescription;
             loadServiceCodes();
+            _ratesUrl = ConfigurationManager.AppSettings["UPSProdUrl"];
 	    }
 
 		#endregion
@@ -93,21 +100,34 @@ namespace DotNetShipping.ShippingProviders
 			set { _services = value; }
 		}
 
+	    private bool _useTestEnvironment;
+        public bool UseTestEnvironment { get { return _useTestEnvironment; }
+            set
+            {
+                _useTestEnvironment = value;
+                if (value)
+                    _ratesUrl = ConfigurationManager.AppSettings["UPSTestUrl"];
+            } }
+
 		#endregion
 
 		#region Methods
 
 		public override void GetRates()
 		{
-			var request = (HttpWebRequest) WebRequest.Create(ratesUrl);
+			var request = (HttpWebRequest) WebRequest.Create(_ratesUrl);
 			request.Method = "POST";
 			request.Timeout = _timeout * 1000;
+
+            byte[] bytes = buildRatesRequestMessage();
+
 			// Per the UPS documentation, the "ContentType" should be "application/x-www-form-urlencoded".
 			// However, using "text/xml; encoding=UTF-8" lets us avoid converting the byte array returned by
 			// the buildRatesRequestMessage method and (so far) works just fine.
-			request.ContentType = "text/xml; encoding=UTF-8"; //"application/x-www-form-urlencoded";
-			byte[] bytes = buildRatesRequestMessage();
-			//System.Text.Encoding.Convert(Encoding.UTF8, Encoding.ASCII, this.buildRatesRequestMessage());
+            //byte[] bytes = System.Text.Encoding.Convert(Encoding.UTF8, Encoding.ASCII, buildRatesRequestMessage());
+
+
+            request.ContentType = "application/x-www-form-urlencoded";
 			request.ContentLength = bytes.Length;
 			Stream stream = request.GetRequestStream();
 			stream.Write(bytes, 0, bytes.Length);
@@ -128,33 +148,53 @@ namespace DotNetShipping.ShippingProviders
 			writer.WriteElementString("UserId", _userID);
 			writer.WriteElementString("Password", _password);
 			writer.WriteEndDocument();
+
 			writer.WriteStartDocument();
 			writer.WriteStartElement("RatingServiceSelectionRequest");
 			writer.WriteAttributeString("lang", "en-US");
 			writer.WriteStartElement("Request");
 			writer.WriteStartElement("TransactionReference");
 			writer.WriteElementString("CustomerContext", "Rating and Service");
-			writer.WriteElementString("XpciVersion", "1.0001");
+            writer.WriteElementString("XpciVersion", "1.0");
 			writer.WriteEndElement(); // </TransactionReference>
 			writer.WriteElementString("RequestAction", "Rate");
-			writer.WriteElementString("RequestOption", string.IsNullOrWhiteSpace(_serviceDescription) ? "Shop" : _serviceDescription);
+			writer.WriteElementString("RequestOption", string.IsNullOrWhiteSpace(_serviceDescription) ? "Shop" : "Rate");
 			writer.WriteEndElement(); // </Request>
-			writer.WriteStartElement("PickupType");
-			writer.WriteElementString("Code", "03");
-			writer.WriteEndElement(); // </PickupType>
+			writer.WriteStartElement("CustomerClassification");
+			writer.WriteElementString("Code", "04");
+			writer.WriteEndElement(); // </CustomerClassification>
 			writer.WriteStartElement("Shipment");
-			writer.WriteStartElement("Shipper");
+
+		    if (UseNegotiatedRates)
+		    {
+		        writer.WriteStartElement("RateInformation");
+		        writer.WriteElementString("NegotiatedRatesIndicator", "");
+		        writer.WriteEndElement();
+		    }
+
+		    writer.WriteStartElement("Shipper");
+            if (!String.IsNullOrEmpty(ShipperNumber))
+                writer.WriteElementString("ShipperNumber", ShipperNumber); //required for negotiated rates. If the
+                                                                           //UseNegotiatedRate flag isn't set then
+                                                                           //standard rates will be returned.
 			writer.WriteStartElement("Address");
 			writer.WriteElementString("PostalCode", Shipment.OriginAddress.PostalCode);
+            writer.WriteElementString("StateProvinceCode", Shipment.OriginAddress.State);
+		    writer.WriteElementString("CountryCode", "US");
 			writer.WriteEndElement(); // </Address>
 			writer.WriteEndElement(); // </Shipper>
 			writer.WriteStartElement("ShipTo");
 			writer.WriteStartElement("Address");
-            if (Shipment.DestinationAddress.IsUnitedStatesAddress())
-			    writer.WriteElementString("PostalCode", Shipment.DestinationAddress.PostalCode);
+		    if (Shipment.DestinationAddress.IsUnitedStatesAddress())
+		    {
+		        writer.WriteElementString("PostalCode", Shipment.DestinationAddress.PostalCode);
+                writer.WriteElementString("StateProvinceCode", Shipment.DestinationAddress.State);
+		    }
+            
 			writer.WriteElementString("CountryCode", Shipment.DestinationAddress.CountryCode);
 			writer.WriteEndElement(); // </Address>
 			writer.WriteEndElement(); // </ShipTo>
+            
 		    if (!string.IsNullOrWhiteSpace(_serviceDescription))
 		    {
 		        writer.WriteStartElement("Service");
@@ -168,9 +208,15 @@ namespace DotNetShipping.ShippingProviders
 				writer.WriteElementString("Code", "02");
 				writer.WriteEndElement(); //</PackagingType>
 				writer.WriteStartElement("PackageWeight");
-				writer.WriteElementString("Weight", Shipment.Packages[i].RoundedWeight.ToString());
+                writer.WriteStartElement("UnitOfMeasurement");
+			    writer.WriteElementString("Code", "LBS");
+                writer.WriteEndElement();
+                writer.WriteElementString("Weight", Shipment.Packages[i].RoundedWeight.ToString());
 				writer.WriteEndElement(); // </PackageWeight>
 				writer.WriteStartElement("Dimensions");
+                writer.WriteStartElement("UnitOfMeasurement");
+                writer.WriteElementString("Code", "IN");
+                writer.WriteEndElement();
 				writer.WriteElementString("Length", Shipment.Packages[i].RoundedLength.ToString());
 				writer.WriteElementString("Width", Shipment.Packages[i].RoundedWidth.ToString());
 				writer.WriteElementString("Height", Shipment.Packages[i].RoundedHeight.ToString());
@@ -183,7 +229,7 @@ namespace DotNetShipping.ShippingProviders
 			writer.BaseStream.Position = 0;
 			writer.BaseStream.Read(buffer, 0, buffer.Length);
 			writer.Close();
-
+            
 			return buffer;
 		}
 

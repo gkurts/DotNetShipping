@@ -1,9 +1,7 @@
 using System.Configuration;
 using System.Diagnostics;
 using System.Linq;
-
 using DotNetShipping.ShippingProviders;
-
 using Xunit;
 
 namespace DotNetShipping.Tests.Features
@@ -74,6 +72,31 @@ namespace DotNetShipping.Tests.Features
         #endregion
 
         #region test methods
+
+        /// UPS Sure Post is a service that the UPS Shipper must register for. That is why this method is commented out.
+        [Fact]
+        public void UPS_Sure_Post_Returns_Valid_Rate()
+        {
+            var rateManager = new RateManager();
+
+            var upsProvider = new UPSProvider(UPSLicenseNumber, UPSUserId, UPSPassword, "UPS Sure Post");
+            upsProvider.ShipperNumber = "31E749";
+            upsProvider.UseNegotiatedRates = true;
+
+            rateManager.AddProvider(upsProvider);
+
+            Shipment response = rateManager.GetRates(DomesticAddress1, DomesticAddress2, Package1);
+
+            Debug.WriteLine(string.Format("Rates returned: {0}", response.Rates.Any() ? response.Rates.Count.ToString() : "0"));
+
+            Assert.NotNull(response);
+            Assert.NotEmpty(response.Rates);
+            Assert.Empty(response.ServerErrors);
+            Assert.Equal(response.Rates.Count, 1);
+            Assert.True(response.Rates.First().TotalCharges > 0);
+
+            Debug.WriteLine(response.Rates.First().Name + ": " + response.Rates.First().TotalCharges);
+        }
 
         [Fact]
         public void UPS_Returns_Rates_When_Using_International_Destination_Addresses_For_All_Services()

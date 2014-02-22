@@ -55,6 +55,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Features\FedExShipRates.cs" />
+    <Compile Include="Features\Functionality.cs" />
     <Compile Include="Features\UPSRates.cs" />
     <Compile Include="Features\USPSDomesticRates.cs" />
     <Compile Include="Features\USPSInternationalRates.cs" />
